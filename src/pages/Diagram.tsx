@@ -47,7 +47,6 @@ export default function Diagram({ data }: any) {
         };
       });
 
-      // ✅ NORMALIZE EDGES
       const rfEdges: Edge[] = parsed.edges.map((e: any) => ({
         id: e.id,
         source: e.source,
