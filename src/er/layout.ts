@@ -2,112 +2,98 @@ import ELK from "elkjs/lib/elk.bundled.js";
 
 const elk = new ELK();
 
-// Helper to find the center of a node
-const getCenter = (node: any) => ({
-  x: node.position.x + node.width / 2,
-  y: node.position.y + node.height / 2,
-});
-
 export async function layoutGraph(nodes: any[], edges: any[]) {
-  // 1. SEPARATE THE "SKELETON" FROM THE "SATELLITES"
-  // We only want ELK to layout Entities and Relationships.
-  // Attributes will be placed manually around them.
-  const coreNodes = nodes.filter(
-    (n) => n.type === "entity" || n.type === "weakEntity" || n.type === "relationship" || n.type === "isa"
-  );
-  
-  const attributeNodes = nodes.filter(
-    (n) => n.type === "attribute" || n.type === "multivaluedAttribute"
-  );
+  const coreNodes = nodes.filter(n => ["entity", "weakEntity", "relationship", "isa"].includes(n.type));
+  const attributeNodes = nodes.filter(n => ["attribute", "multivaluedAttribute"].includes(n.type));
+  const coreNodeIds = new Set(coreNodes.map(n => n.id));
 
-  // Map which attribute belongs to which entity based on edges
+  // Association Mapping
+  const parentToAttributes: Record<string, string[]> = {};
   const attributeParentMap: Record<string, string> = {};
-  const coreEdges = edges.filter((e) => {
-    const isAttributeEdge =
-      attributeNodes.find((a) => a.id === e.target || a.id === e.source) &&
-      coreNodes.find((c) => c.id === e.target || c.id === e.source);
 
-    if (isAttributeEdge) {
-      // Find who is the attribute and who is the parent
-      const attrId = attributeNodes.find((a) => a.id === e.target || a.id === e.source)?.id;
-      const parentId = coreNodes.find((c) => c.id === e.target || c.id === e.source)?.id;
-      if (attrId && parentId) attributeParentMap[attrId] = parentId;
-      return false; // Remove this edge from the ELK simulation
+  edges.forEach(e => {
+    let attrId, parentId;
+    if (attributeNodes.find(a => a.id === e.source) && coreNodeIds.has(e.target)) {
+      attrId = e.source; parentId = e.target;
+    } else if (attributeNodes.find(a => a.id === e.target) && coreNodeIds.has(e.source)) {
+      attrId = e.target; parentId = e.source;
     }
-    return true; // Keep entity-to-entity edges
+
+    if (attrId && parentId) {
+      attributeParentMap[attrId] = parentId;
+      if (!parentToAttributes[parentId]) parentToAttributes[parentId] = [];
+      parentToAttributes[parentId].push(attrId);
+    }
   });
 
-  // 2. CONFIGURE ELK FOR THE SKELETON ONLY
   const graph = {
     id: "root",
     layoutOptions: {
-      "elk.algorithm": "stress", // 'stress' is best for unconstrained connectivity
-      "elk.stress.desiredEdgeLength": "200", // Give entities breathing room
-      "elk.spacing.nodeNode": "100", 
+      "elk.algorithm": "stress",
+      "elk.stress.desiredEdgeLength": "200",
+      "elk.spacing.nodeNode": "100",
     },
-    children: coreNodes.map((n) => ({
-      id: n.id,
-      width: 140, // Uniform size for the skeleton layout to prevent weird gaps
-      height: 70,
-    })),
-    edges: coreEdges.map((e) => ({
-      id: e.id,
-      sources: [e.source],
-      targets: [e.target],
-    })),
+    children: coreNodes.map(n => {
+      const attrCount = parentToAttributes[n.id]?.length || 0;
+      const requiredRadius = 120 + (attrCount * 20); 
+      const boxSize = requiredRadius * 2;
+
+      return { 
+        id: n.id, 
+        width: boxSize, 
+        height: boxSize,
+        layoutOptions: { "desiredRadius": requiredRadius.toString() } 
+      };
+    }),
+    edges: edges
+      .filter(e => coreNodeIds.has(e.source) && coreNodeIds.has(e.target))
+      .map(e => ({ id: e.id, sources: [e.source], targets: [e.target] })),
   };
 
-  // 3. RUN THE LAYOUT
-  const layout = await elk.layout(graph);
+  try {
+    const layout = await elk.layout(graph);
+    const finalNodes: any[] = [];
 
-  // 4. APPLY POSITIONS TO CORE NODES
-  const finalNodes: any[] = [];
-  const corePositions: Record<string, { x: number; y: number }> = {};
+    layout.children?.forEach((n: any) => {
+      const radius = parseFloat(n.layoutOptions?.desiredRadius || "120");
+      const centerX = n.x + n.width / 2;
+      const centerY = n.y + n.height / 2;
 
-  layout.children?.forEach((n: any) => {
-    // Center the layout a bit
-    const pos = { x: n.x + 100, y: n.y + 100 };
-    corePositions[n.id] = pos;
-    finalNodes.push({
-      id: n.id,
-      position: pos,
-    });
-  });
-
-  // 5. MANUALLY PLACE ATTRIBUTES IN A RADIAL CLUSTER
-  // Group attributes by their parent
-  const attributesByParent: Record<string, string[]> = {};
-  attributeNodes.forEach((attr) => {
-    const parentId = attributeParentMap[attr.id];
-    if (parentId) {
-      if (!attributesByParent[parentId]) attributesByParent[parentId] = [];
-      attributesByParent[parentId].push(attr.id);
-    } else {
-      // Orphan attributes (shouldn't happen often) go to (0,0) or stick around
-      finalNodes.push({ id: attr.id, position: { x: 0, y: 0 } });
-    }
-  });
-
-  // Place them
-  Object.entries(attributesByParent).forEach(([parentId, attrIds]) => {
-    const parentPos = corePositions[parentId];
-    if (!parentPos) return;
-
-    const radius = 130; // Distance from Entity center to Attribute center
-    const stepAngle = (2 * Math.PI) / attrIds.length;
-    
-    attrIds.forEach((attrId, index) => {
-      const angle = index * stepAngle;
-      // Calculate position
-      const x = parentPos.x + radius * Math.cos(angle) + 20; // +20 offset to center relatively
-      const y = parentPos.y + radius * Math.sin(angle) + 20;
-      
+      // Place Entity
       finalNodes.push({
-        id: attrId,
-        position: { x, y },
+        id: n.id,
+        position: { x: centerX - 70, y: centerY - 35 } // Adjust for visual center
       });
-    });
-  });
 
-  return finalNodes;
+      // Place Attributes
+      const satellites = parentToAttributes[n.id] || [];
+      if (satellites.length > 0) {
+        const orbitRadius = radius - 40; 
+        const stepAngle = (2 * Math.PI) / satellites.length;
+
+        satellites.forEach((attrId, index) => {
+          const angle = index * stepAngle;
+          finalNodes.push({
+            id: attrId,
+            position: {
+              x: centerX + (orbitRadius * Math.cos(angle)) - 50,
+              y: centerY + (orbitRadius * Math.sin(angle)) - 25,
+            }
+          });
+        });
+      }
+    });
+
+    // Clean up orphans
+    attributeNodes.forEach(attr => {
+      if (!attributeParentMap[attr.id]) {
+        finalNodes.push({ id: attr.id, position: { x: 0, y: 0 } });
+      }
+    });
+
+    return finalNodes;
+  } catch (error) {
+    console.error("Layout Error:", error);
+    return nodes.map((n, i) => ({ id: n.id, position: { x: i * 50, y: i * 50 } }));
+  }
 }
