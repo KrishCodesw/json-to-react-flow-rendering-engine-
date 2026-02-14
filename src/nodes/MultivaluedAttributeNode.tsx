@@ -1,9 +1,30 @@
 import { Handle, Position } from "@xyflow/react";
 
+// CSS to force the handle to the absolute center
+const handleStyle = {
+  left: "50%",
+  top: "50%",
+  transform: "translate(-50%, -50%)",
+  opacity: 0,
+  width: 10,
+  height: 10,
+  position: "absolute" as const,
+  border: "none",
+  background: "transparent",
+  zIndex: 10,
+};
+
 export default function MultivaluedAttributeNode({ data }: any) {
   return (
-    <div style={{ width: 120, height: 60 }}>
-      <Handle type="target" position={Position.Top} />
+    <div style={{ width: 120, height: 60, position: "relative" }}>
+      {/* Target Handle: Centered */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={handleStyle}
+        isConnectable={true}
+      />
+
       <svg width={120} height={60} style={{ overflow: "visible" }}>
         {/* Outer Ellipse */}
         <ellipse
@@ -30,9 +51,10 @@ export default function MultivaluedAttributeNode({ data }: any) {
           <input
             className="nodrag"
             value={data.label}
-            onChange={(evt) => data.onChange(evt.target.value)}
+            onChange={(evt) => data.onChange?.(evt.target.value)}
             style={{
               width: "100%",
+              height: "100%",
               border: "none",
               background: "transparent",
               textAlign: "center",
@@ -42,7 +64,14 @@ export default function MultivaluedAttributeNode({ data }: any) {
           />
         </foreignObject>
       </svg>
-      <Handle type="source" position={Position.Bottom} />
+
+      {/* Source Handle: Centered */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={handleStyle}
+        isConnectable={true}
+      />
     </div>
   );
 }
